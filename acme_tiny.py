@@ -165,12 +165,18 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA):
         return (m.group(1), { a[0]: a[1].strip('"') for a in [attr.split("=") for attr in m.group(2).split("\s*;\s*")] })
 
     up = [link for link, attr in [parse_link_header(l) for l in headers.getallmatchingheaders("Link")] if attr['rel'] == 'up']
-    certchain = [result] + [urlopen(url).read() for url in up]
 
     # return signed certificate!
     log.info("Certificate signed!")
-    return "".join(["""-----BEGIN CERTIFICATE-----\n{0}\n-----END CERTIFICATE-----\n""".format(
-                    "\n".join(textwrap.wrap(base64.b64encode(cert).decode('utf8'), 64))) for cert in certchain])
+    def create_cert_string(cert):
+        return """-----BEGIN CERTIFICATE-----\n{0}\n-----END CERTIFICATE-----\n""".format(
+            "\n".join(textwrap.wrap(base64.b64encode(cert).decode('utf8'), 64)))
+
+    intermediate_certs = ''
+    for cert in [urlopen(url).read() for url in up]:
+        intermediate_certs += create_cert_string(cert)
+
+    return [create_cert_string(result), intermediate_certs]
 
 def main(argv):
     parser = argparse.ArgumentParser(
@@ -194,17 +200,27 @@ def main(argv):
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
     parser.add_argument("--acme-dir", required=True, help="path to the .well-known/acme-challenge/ directory")
     parser.add_argument("--out", required=False, help="path to write the output cert")
+    parser.add_argument("--combine-intermediate", required=False, help="append intermediate cert")
+    parser.add_argument("--intermediate-out", required=False, help="path to write the intermediate cert")
     parser.add_argument("--quiet", action="store_const", const=logging.ERROR, help="suppress output except for errors")
     parser.add_argument("--ca", default=DEFAULT_CA, help="certificate authority, default is Let's Encrypt")
 
     args = parser.parse_args(argv)
     LOGGER.setLevel(args.quiet or LOGGER.level)
-    signed_crt = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER, CA=args.ca)
+    certs = get_crt(args.account_key, args.csr, args.acme_dir, log=LOGGER, CA=args.ca)
     if args.out:
-        with open(args.out, "w") as out_file:
-            out_file.write(signed_crt)
+        if args.intermediate_out:
+            with open(args.intermediate_out, "w") as out_file:
+                out_file.write(certs[1])
+            with open(args.out, "w") as out_file:
+                out_file.write(certs[0])
+        else:
+            with open(args.out, "w") as out_file:
+                out_file.write("".join(certs))
+    elif args.combine_intermediate:
+        sys.stdout.write("".join(certs))
     else:
-        sys.stdout.write(signed_crt)
+        sys.stdout.write(certs[0])
 
 if __name__ == "__main__": # pragma: no cover
     main(sys.argv[1:])
